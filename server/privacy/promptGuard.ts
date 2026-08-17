@@ -43,6 +43,26 @@ const INJECTION_RULES: Array<{ pattern: RegExp; reason: string; weight: number }
     reason: "audit-obfuscation attempt",
     weight: 4,
   },
+  {
+    pattern: /(?:remember|from\s+now\s+on|for\s+future\s+requests).{0,64}(?:ignore|override|reveal|send|share)/i,
+    reason: "persistent instruction poisoning attempt",
+    weight: 4,
+  },
+  {
+    pattern: /<(?:img|iframe|script|a)\b[^>]*(?:src|href)\s*=\s*["']?https?:\/\/[^>]*(?:data|token|secret|client|private)/i,
+    reason: "markup-based exfiltration attempt",
+    weight: 5,
+  },
+  {
+    pattern: /(?:call|invoke|execute|use)\s+(?:the\s+)?(?:tool|function|webhook).{0,64}(?:send|upload|delete|export|share)/i,
+    reason: "unsafe tool-use attempt",
+    weight: 5,
+  },
+  {
+    pattern: /(?:system|developer|admin)\s*(?:instruction|message|override)\s*[:=]/i,
+    reason: "forged privileged message",
+    weight: 5,
+  },
 ];
 
 const SUSPICIOUS_TERMS = /\b(?:exfiltrate|jailbreak|prompt\s+injection|system\s+prompt|root\s+access|drop\s+table)\b/i;

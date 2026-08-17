@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { redactSensitiveText } from "../privacy/redaction";
 import { GuardDecision, inspectUntrustedText } from "../privacy/promptGuard";
 
@@ -9,6 +9,8 @@ export type ClientNeedInput = {
   request: string;
   clientReference?: string;
   requestedAgent?: AgentId;
+  tenantId?: string;
+  referenceSecret?: string;
 };
 
 export type SharedNeedMessage = {
@@ -19,6 +21,7 @@ export type SharedNeedMessage = {
   purpose: string;
   needSummary: string;
   clientReference?: string;
+  tenantId: string;
   allowedFields: string[];
   sensitivity: "redacted";
   expiresAt: string;
@@ -53,9 +56,13 @@ const ROUTES: Record<AgentId, AgentRouting> = {
   },
 };
 
-function opaqueClientReference(value: string): string {
+function opaqueClientReference(value: string, tenantId?: string, referenceSecret?: string): string {
+  if (tenantId && referenceSecret) {
+    const digest = createHmac("sha256", referenceSecret).update(`${tenantId}:${value}`).digest("hex").slice(0, 16);
+    return `client-${digest}`;
+  }
   const salt = process.env.CLIENT_REF_SALT ?? "folklore-local-development-only";
-  const digest = createHash("sha256").update(`${salt}:${value}`).digest("hex").slice(0, 16);
+  const digest = createHash("sha256").update(`${salt}:${tenantId ?? "unscoped"}:${value}`).digest("hex").slice(0, 16);
   return `client-${digest}`;
 }
 
@@ -80,7 +87,7 @@ export function buildSharedNeedMessages(input: ClientNeedInput, decision: GuardD
 
   const sanitized = redactSensitiveText(input.request).text.slice(0, 1200);
   const summary = `Client need (sanitized): ${sanitized}`;
-  const clientReference = input.clientReference ? opaqueClientReference(input.clientReference) : undefined;
+  const clientReference = input.clientReference ? opaqueClientReference(input.clientReference, input.tenantId, input.referenceSecret) : undefined;
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
   return chooseRoutes(input).map((route, index) => ({
@@ -91,6 +98,7 @@ export function buildSharedNeedMessages(input: ClientNeedInput, decision: GuardD
     purpose: route.purpose,
     needSummary: summary,
     clientReference,
+    tenantId: input.tenantId ?? "unscoped",
     allowedFields: route.allowedFields,
     sensitivity: "redacted" as const,
     expiresAt,
@@ -101,6 +109,7 @@ export function validateSharedNeedMessage(message: SharedNeedMessage): string[] 
   const errors: string[] = [];
   if (message.messageType !== "need-to-know") errors.push("invalid message type");
   if (!AGENT_IDS.includes(message.toAgent)) errors.push("unknown recipient agent");
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,63}$/.test(message.tenantId)) errors.push("invalid tenant context");
   if (message.sensitivity !== "redacted") errors.push("message must be marked redacted");
   if (message.needSummary.length > 1400) errors.push("summary exceeds the outbound size limit");
   if (inspectUntrustedText(message.needSummary).risk === "high") errors.push("summary contains a blocked instruction");
