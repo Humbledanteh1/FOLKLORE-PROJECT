@@ -5,3 +5,25 @@
 - [ ] Commit the completed project with a descriptive message.
 - [ ] Push the commit to the selected GitHub repository.
 - [ ] Verify the remote commit and repository status.
+- [x] Review and list the agents currently identified in the Folklore site.
+- [x] Refine the scrolled header with rounded translucent styling and save a checkpoint.
+- [x] Apply rounded glass styling with metallic sheen to all Folklore buttons.
+- [x] Correct the featured-agent white-border visual edit and remove unintended inline styles.
+- [x] Define the Return & Refund Ticket Drafter architecture, safeguards, and connection path.
+- [x] Build the interactive Return & Refund Ticket Drafter workspace with human review and no-send safeguards.
+- [x] Add collapsible details to the Return & Refund Ticket Drafter record and workspace.
+- [x] Build the Low-Stock Watchkeeper interactive workspace with human review safeguards.
+- [x] Build the Delivery Exception Interpreter workspace with human-review safeguards and no-send actions.
+- [x] Build the Campaign Recap Editor workspace with human-review safeguards and no-publish actions.
+- [x] Build the Reviews & Feedback Agent workspace with human-review safeguards and no-publication actions.
+- [x] Clean up the featured-agent tabs, remove unintended inline styles, and fix the overlay so all labels fit.
+- [x] Add distinct icons to the featured-agent tabs.
+- [x] Add and verify a light/dark mode toggle for the Folklore interface.
+- [x] Improve dark-mode text and control contrast across featured and agent workspace surfaces.
+- [x] Apply and verify a readable black treatment for the Low-Stock Watchkeeper workspace.
+- [x] Make the global Folklore dark-mode background true black and verify both themes.
+- [x] Add a System theme preference that follows the visitor's OS color scheme.
+- [x] Move front-page featured-agent content into a dedicated agent-library section without changing agent behavior.
+- [x] Add a billing and plan-selection section for the Folklore agents.
+- [ ] Prepare secure payment processing rather than a non-functional checkout placeholder.
+- [x] Defer Stripe checkout until merchant keys and the subscription model are confirmed.
