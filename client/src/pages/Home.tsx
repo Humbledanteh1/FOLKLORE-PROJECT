@@ -1,6 +1,6 @@
 /* Folklore home: a concise field-guide landing page that directs operators to the full agent library. */
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, BookOpen, Check, CheckCircle2, ChevronDown, CircleDollarSign, Compass, Leaf, LockKeyhole, Menu, Monitor, Moon, Send, ShieldCheck, Sparkles, Sun, UsersRound, X } from "lucide-react";
+import { ArrowDownRight, ArrowRight, ArrowUpRight, BookOpen, Check, ChevronDown, CircleDollarSign, Compass, Leaf, LockKeyhole, Menu, Monitor, Moon, Sparkles, Sun, X } from "lucide-react";
 
 type ThemePreference = "system" | "light" | "dark";
 type Plan = {
@@ -12,15 +12,6 @@ type Plan = {
   features: readonly string[];
   action: string;
   href?: string;
-};
-
-type PrivacyResult = {
-  status: "forwarded" | "blocked" | "review";
-  response: string;
-  redactions: { label: string; count: number }[];
-  decision: { risk: "low" | "medium" | "high"; reasons: string[] };
-  outboundMessages: { toAgent: string; allowedFields: string[]; needSummary: string }[];
-  audit: { rawClientDataForwarded: false; recipients: string[] };
 };
 
 const agentFields = [
@@ -72,12 +63,6 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
-  const [privacyRequest, setPrivacyRequest] = useState("");
-  const [clientReference, setClientReference] = useState("");
-  const [privacyAgent, setPrivacyAgent] = useState("auto");
-  const [authToken, setAuthToken] = useState("");
-  const [privacyLoading, setPrivacyLoading] = useState(false);
-  const [privacyResult, setPrivacyResult] = useState<PrivacyResult | null>(null);
   const resolvedTheme = themePreference === "system" ? systemTheme : themePreference;
   const ThemeIcon = themePreference === "system" ? Monitor : resolvedTheme === "dark" ? Moon : Sun;
 
@@ -103,21 +88,6 @@ export default function Home() {
   const selectTheme = (preference: ThemePreference) => {
     setThemePreference(preference);
     setThemeMenuOpen(false);
-  };
-  const handlePrivacySubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setPrivacyLoading(true);
-    setPrivacyResult(null);
-    try {
-      const response = await fetch("/api/privacy/needs", { method: "POST", headers: { "Content-Type": "application/json", ...(authToken ? { Authorization: authToken.startsWith("Bearer ") ? authToken : `Bearer ${authToken}` } : {}) }, body: JSON.stringify({ request: privacyRequest, clientReference: clientReference || undefined, requestedAgent: privacyAgent === "auto" ? undefined : privacyAgent }) });
-      if (!response.ok) throw new Error("gateway rejected the request");
-      const result = await response.json() as PrivacyResult;
-      setPrivacyResult(result);
-    } catch {
-      setPrivacyResult({ status: "review", response: "The gateway requires a valid tenant bearer token. Nothing was shared with another agent.", redactions: [], decision: { risk: "medium", reasons: ["authentication required"] }, outboundMessages: [], audit: { rawClientDataForwarded: false, recipients: [] } });
-    } finally {
-      setPrivacyLoading(false);
-    }
   };
 
   return (
@@ -171,8 +141,6 @@ export default function Home() {
         </section>
 
         <section className="process-section" id="how-it-works" aria-labelledby="process-title"><div className="process-image"><img src="/manus-storage/folklore-botanical_ec118ecd.png" alt="Hand-inked botanical field guide illustration with birds and reeds" /><span className="image-stamp">No. 07<br />Field guide</span></div><div className="process-content"><div className="eyebrow eyebrow-light"><span className="eyebrow-dot" /> How it works</div><h2 id="process-title">Trust is a <em>trail,</em> not a badge.</h2><div className="steps"><div className="step"><span className="step-number">01</span><div><h3>Browse the record</h3><p>Start with the real task and the boundary around it—not a promise about the future.</p></div></div><div className="step"><span className="step-number">02</span><div><h3>Run it in your world</h3><p>Use a focused workspace where it matters. Keep edge cases close and the final decision clear.</p></div></div><div className="step"><span className="step-number">03</span><div><h3>Choose access deliberately</h3><p>Explore the public library now and select a plan when the paid access model is ready.</p></div></div></div></div></section>
-
-        <section className="privacy-section" id="privacy" aria-labelledby="privacy-title"><div className="privacy-copy"><div className="eyebrow"><span className="eyebrow-dot" /> Privacy gateway / live pattern</div><h2 id="privacy-title">Share the <em>need,</em> not the record.</h2><p>Describe what the client needs. Folklore removes common identifiers, checks for instruction hijacking, and sends each downstream agent only the fields required for its job.</p><div className="privacy-principles"><div><LockKeyhole size={17} /><span><strong>Redact first</strong>Emails, phones, cards, IPs, and credentials are replaced before routing.</span></div><div><UsersRound size={17} /><span><strong>Need-to-know</strong>Agents receive an opaque reference and a bounded task summary.</span></div><div><ShieldCheck size={17} /><span><strong>Fail closed</strong>Suspicious requests are blocked or held for review, never improvised.</span></div></div><form className="privacy-form" onSubmit={handlePrivacySubmit}><label htmlFor="privacy-request">Client need</label><textarea id="privacy-request" value={privacyRequest} onChange={(event) => setPrivacyRequest(event.target.value)} placeholder="Example: A customer needs a refund because a delivery is late." rows={5} required /><div className="privacy-form-grid"><label htmlFor="client-reference">Opaque client reference <span>optional</span><input id="client-reference" value={clientReference} onChange={(event) => setClientReference(event.target.value)} placeholder="Internal reference" /></label><label htmlFor="privacy-agent">Route to<select id="privacy-agent" value={privacyAgent} onChange={(event) => setPrivacyAgent(event.target.value)}><option value="auto">Auto-select by need</option><option value="support">Support</option><option value="inventory">Inventory</option><option value="fulfillment">Fulfillment</option><option value="marketing">Marketing</option></select></label></div><label className="privacy-token-field" htmlFor="privacy-token">Tenant bearer token <span>sent only in the request header; never stored</span><input id="privacy-token" type="password" value={authToken} onChange={(event) => setAuthToken(event.target.value)} placeholder="Paste a short-lived tenant token" autoComplete="off" /></label><button className="button button-primary privacy-submit" type="submit" disabled={privacyLoading}>{privacyLoading ? "Checking boundary…" : "Run privacy check"} {privacyLoading ? <ShieldCheck size={16} /> : <Send size={16} />}</button></form></div><div className="privacy-panel"><div className="privacy-panel-header"><span className="privacy-panel-label"><span className="live-dot" /> Gateway status</span><span className="privacy-default">Default deny</span></div>{privacyResult ? <div className={`privacy-result result-${privacyResult.status}`}><div className="privacy-result-title">{privacyResult.status === "blocked" ? <AlertTriangle size={20} /> : privacyResult.status === "forwarded" ? <CheckCircle2 size={20} /> : <ShieldCheck size={20} />}<strong>{privacyResult.status === "blocked" ? "Request blocked" : privacyResult.status === "forwarded" ? "Need shared safely" : "Review boundary"}</strong><span className="risk-label">{privacyResult.decision.risk} risk</span></div><p>{privacyResult.response}</p>{privacyResult.redactions.length > 0 && <div className="privacy-result-block"><span className="result-kicker">Redactions applied</span><div className="redaction-list">{privacyResult.redactions.map((item) => <span key={item.label}>{item.label.replace("_", " ")} × {item.count}</span>)}</div></div>}<div className="privacy-result-block"><span className="result-kicker">Downstream recipients</span>{privacyResult.audit.recipients.length > 0 ? <div className="recipient-list">{privacyResult.audit.recipients.map((recipient) => <span key={recipient}>{recipient} agent</span>)}</div> : <span className="empty-result">No agent received the request.</span>}</div>{privacyResult.outboundMessages.length > 0 && <div className="privacy-message-preview"><span className="result-kicker">Safe outbound summary</span><p>{privacyResult.outboundMessages[0].needSummary}</p><span className="allowed-fields">Allowed fields: {privacyResult.outboundMessages[0].allowedFields.join(" · ")}</span></div>}<div className="privacy-audit"><ShieldCheck size={15} /> Raw client data forwarded: <strong>never</strong></div></div> : <div className="privacy-empty"><ShieldCheck size={29} /><strong>Ready to inspect a need.</strong><p>The result will show what was redacted, which agent can receive the task, and why.</p><div className="privacy-empty-row"><span>1. sanitize</span><span>2. assess</span><span>3. route</span></div></div>}</div></section>
 
         <section className="closing-section" aria-labelledby="closing-title"><div className="closing-mark"><BookOpen size={23} /><span>Archive note / 2026</span></div><div><div className="eyebrow"><span className="eyebrow-dot" /> For operators, by operators</div><h2 id="closing-title">Start with the task<br />worth <em>understanding.</em></h2></div><div className="closing-action"><p>Open the library to inspect a record, try a workflow, and keep responsibility with your team.</p><a className="button button-primary" href="/agents#agent-library">Browse agents <Sparkles size={16} /></a></div></section>
       </main>
