@@ -60,17 +60,31 @@ Start the built server with:
 NODE_ENV=production PORT=3000 node dist/index.js
 ```
 
-The browser interface is available at `http://localhost:3000/`. The API health check is available at `GET /api/privacy/health`.
+The browser interface is available at `http://localhost:3000/`. The API health check is available at `GET /api/privacy/health`. The production build starts from `server/_core/index.ts`, which registers the privacy routes through `server/privacyRoutes.ts` alongside the existing OAuth, storage, and tRPC routes.
 
-The protected endpoint requires a tenant bearer token. Configure the server with a secret that is injected by the deployment platform, never committed to this public repository:
+The protected endpoint requires a tenant bearer token. The recommended deployment mode is provider-neutral OIDC/JWT validation using a cached JWKS. The repository keeps the compact `fpv1` HMAC verifier only as an explicit local-development fallback.
+
+Configure OIDC mode with values injected by the deployment platform:
 
 ```bash
-export FOLKLORE_AUTH_SECRET="replace-with-a-secret-managed-outside-the-repository"
+export FOLKLORE_AUTH_MODE=oidc
+export FOLKLORE_OIDC_ISSUER="https://idp.example.com/"
+export FOLKLORE_OIDC_AUDIENCE="https://api.example.com"
+export FOLKLORE_OIDC_JWKS_URL="https://idp.example.com/.well-known/jwks.json"
+export FOLKLORE_OIDC_TENANT_CLAIM="https://folklore.example/tenant_id"
+export FOLKLORE_OIDC_REQUIRED_SCOPE="needs:submit"
 ```
 
-The token verifier accepts the repository’s compact `fpv1` format for the prototype. Its claims include `sub`, `tenantId`, `scopes`, `iat`, `exp`, and `aud`. The endpoint requires the `needs:submit` scope. Tenant context is taken from the verified token, never from a request-body or user-supplied tenant ID. Opaque client references are HMAC-bound to both the tenant and the client reference, so identical references in different tenants do not collide.
+The verifier checks the signature against the provider’s JWKS, pins the issuer and audience, allows only the configured asymmetric algorithms, validates expiry and issuance time, extracts scopes from `scope` and `permissions`, and derives tenant context from a dedicated tenant claim. It never accepts tenant identity from the request body or an arbitrary header. JWKS retrieval is cached by the `jose` remote-key resolver and refreshes when a signing key identifier changes.
 
-The shared secret is not a substitute for HTTPS, encryption, tenant lifecycle management, revocation, or a production identity provider. For production, prefer short-lived JWT access tokens issued by a centralized OIDC/OAuth provider and verify the expected issuer, audience, signature algorithm, expiry, and scopes locally. Never commit secrets or real client data to this public repository.
+| Provider | Issuer | JWKS URL | Tenant claim setup |
+| --- | --- | --- | --- |
+| Auth0 | `https://YOUR_DOMAIN/` | `https://YOUR_DOMAIN/.well-known/jwks.json` | Add a namespaced custom claim such as `https://folklore.example/tenant_id` using an Action; enable API RBAC if using `permissions` |
+| Keycloak | `https://HOST/realms/REALM` | `https://HOST/realms/REALM/protocol/openid-connect/certs` | Add a protocol-mapper claim, preferably a tenant membership or tenant ID claim, and request the `needs:submit` client scope |
+
+Auth0 exposes per-tenant JWKS and recommends caching it while refetching on an unknown `kid` during key rotation [6]. Keycloak publishes the OIDC discovery document under `/realms/{realm}/.well-known/openid-configuration` and its certificate endpoint under `/realms/{realm}/protocol/openid-connect/certs`; its documentation recommends local JWT validation when tokens are JWTs and introspection when active-state checks or opaque tokens are required [7]. Never use an ID token as the API bearer token: request an access token whose audience is this gateway.
+
+For a staged migration, deploy `FOLKLORE_AUTH_MODE=hmac` only in a non-production environment, add OIDC tests, configure the provider’s issuer/audience/JWKS/tenant claim, validate a real access token in a staging environment, then switch production to `oidc`. Do not support both modes silently in the same production deployment without an explicit monitoring and sunset plan.
 
 ## API example
 
@@ -142,21 +156,52 @@ To add a custom adversarial vector, use a synthetic payload with no real secrets
 
 ## Authenticated tenant-aware access control
 
-The gateway now establishes tenant context in middleware before the protected request handler runs. The flow is:
+The gateway establishes tenant context in middleware before the protected request handler runs. In OIDC mode, the boundary is:
 
 | Step | Enforcement |
 | --- | --- |
 | 1. Authenticate | Read only `Authorization: Bearer …`; tokens in URLs and request bodies are not accepted |
-| 2. Verify integrity | Check the compact-token HMAC with a constant-time comparison |
-| 3. Verify claims | Check audience, issuance time, expiry, maximum lifetime, tenant-ID format, and required scope |
-| 4. Bind context | Attach `subject`, `tenantId`, and scopes to the server request object |
-| 5. Ignore caller tenant IDs | Do not accept tenant identity from body fields or arbitrary headers |
-| 6. Scope data | HMAC client references with `tenantId:clientReference` and include the verified tenant context in outbound messages |
-| 7. Rate-limit | Count protected requests by verified tenant rather than trusting a caller-provided tenant value |
+| 2. Verify integrity | Validate the JWT with the provider’s cached JWKS and an allowlisted asymmetric algorithm |
+| 3. Verify claims | Pin `iss` and `aud`, validate `iat`/`exp`, require `needs:submit`, and reject malformed tenant claims |
+| 4. Bind context | Attach `subject`, canonical `tenantId`, scopes, and token timestamps to the server request |
+| 5. Ignore caller tenant IDs | Never accept tenant identity from body fields or arbitrary headers |
+| 6. Scope data | HMAC-bind opaque references to `tenantId:clientReference` and include only the verified tenant context in outbound messages |
+| 7. Enforce at the database | Set a transaction-local PostgreSQL tenant setting and let RLS policies filter every protected table |
+| 8. Rate-limit | Count protected requests by verified tenant rather than trusting caller-provided identity |
 
-This pattern follows the principle that protected API endpoints should perform access control locally and that tenant context should be derived from verified authentication claims rather than client input [3] [4]. Bearer tokens must be protected in transit and storage because possession of the token is sufficient to use it [5].
+This follows the principle that API authorization should derive tenant context from verified claims and that database isolation should be enforced independently of application query discipline [3] [4]. The OIDC implementation is in `server/oidc.ts`; `server/auth.ts` remains the explicit HMAC fallback.
 
-The prototype’s HMAC token is intentionally small and self-contained for local development and service-to-service experiments. It does not provide centralized issuance, refresh, revocation, key rotation, administrator lifecycle, or proof-of-possession. In a production deployment, replace `server/auth.ts` token verification with a well-maintained OIDC/JWT verifier backed by a trusted identity provider and a JWKS endpoint. The downstream data layer must also enforce tenant filters or database row-level security; API middleware alone cannot repair a repository that performs unscoped queries.
+### PostgreSQL RLS design
+
+The repository currently uses Drizzle’s MySQL adapter (`mysqlTable` and `drizzle-orm/mysql2`) for its scaffold user table. PostgreSQL RLS is therefore provided as a separate migration reference rather than silently applied to the existing MySQL connection. To use it, move the protected data path to PostgreSQL with a PostgreSQL Drizzle adapter or place the gateway’s protected records in a PostgreSQL service. The migration is [`db/postgres/001_tenant_rls.sql`](db/postgres/001_tenant_rls.sql).
+
+The migration creates `app.client_records` and `app.agent_messages`, enables and **forces** RLS, and applies policies using `tenant_id = app.current_tenant_id()`. `USING` controls which existing rows are visible or mutable; `WITH CHECK` controls which tenant IDs can be inserted or written. PostgreSQL uses default-deny behavior when RLS is enabled with no matching policy, but table owners and `BYPASSRLS` roles can bypass it, so the runtime role must be a least-privilege, non-owner, non-`BYPASSRLS` role [8] [9].
+
+Set the verified tenant on the **same pooled connection and inside the same transaction** as the query. `true` makes the setting transaction-local, preventing a tenant context from leaking to the next request that reuses the connection:
+
+```ts
+const client = await pool.connect();
+try {
+  await client.query("BEGIN");
+  await client.query("SELECT set_config('app.tenant_id', $1, true)", [req.tenantAuth!.tenantId]);
+  const records = await client.query(
+    `SELECT id, external_reference, sanitized_summary
+       FROM app.client_records
+      ORDER BY created_at DESC`,
+  );
+  await client.query("COMMIT");
+  return records.rows;
+} catch (error) {
+  await client.query("ROLLBACK");
+  throw error;
+} finally {
+  client.release();
+}
+```
+
+Do not use separate `pool.query()` calls for `set_config` and the protected query: a pool can select different physical connections. Do not let untrusted callers execute arbitrary SQL or choose the `app.tenant_id` value. The application must set it from `req.tenantAuth.tenantId`, which was already derived from a verified OIDC claim. Keep migrations and administrative jobs on a separate controlled role, and test that runtime roles cannot disable RLS or read another tenant by changing request parameters.
+
+A minimal RLS test matrix should prove that tenant A can select, insert, update, and delete only tenant A rows; tenant B cannot see tenant A rows; inserts with a mismatched `tenant_id` fail; a missing tenant setting returns no protected rows; and the runtime role cannot use `SET row_security = off`, `ALTER TABLE`, or `BYPASSRLS`. PostgreSQL notes that operations such as `TRUNCATE` are not governed by RLS, so those privileges must not be granted to the runtime role [8].
 
 ## Security boundaries and limitations
 
@@ -174,8 +219,14 @@ The current server logs decision metadata only: request ID, risk, redaction type
 | `server/privacy/promptGuard.ts` | Prompt-injection and exfiltration detection |
 | `server/agents/contracts.ts` | Agent IDs, routing policy, outbound contract, and validation |
 | `server/agents/orchestrator.ts` | Privacy gateway decision flow |
-| `server/index.ts` | Express API, response headers, rate limit, and static-site server |
+| `server/auth.ts` | HMAC fallback, tenant context type, and opaque reference binding |
+| `server/oidc.ts` | Provider-neutral OIDC/JWT verifier with cached JWKS and tenant-claim extraction |
+| `server/oidc.test.ts` | Local RSA-key tests for issuer, audience, scope, tenant, and active-tenant checks |
+| `server/privacyRoutes.ts` | Shared protected API route registrar used by both server entrypoints |
+| `server/index.ts` | Legacy Express API entrypoint with the same auth-mode selection |
+| `server/_core/index.ts` | Production build entrypoint; registers privacy routes alongside OAuth, storage, and tRPC |
 | `server/privacy-gateway.test.ts` | Privacy and abuse-resistance regression tests |
+| `db/postgres/001_tenant_rls.sql` | PostgreSQL tenant tables, transaction-local context function, and RLS policies |
 | `client/src/pages/Home.tsx` | Public Folklore interface and gateway demo panel |
 | `client/src/index.css` | Field-guide styling for the gateway panel |
 
@@ -190,3 +241,11 @@ The current server logs decision metadata only: request ID, risk, redaction type
 [4]: https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html "OWASP Multi-Tenant Application Security Cheat Sheet"
 
 [5]: https://datatracker.ietf.org/doc/html/rfc6750 "RFC 6750: The OAuth 2.0 Authorization Framework: Bearer Token Usage"
+
+[6]: https://auth0.com/docs/secure/tokens/json-web-tokens/json-web-key-sets "Auth0: JSON Web Key Sets"
+
+[7]: https://www.keycloak.org/securing-apps/oidc-layers "Keycloak: Securing applications and services with OpenID Connect"
+
+[8]: https://www.postgresql.org/docs/current/ddl-rowsecurity.html "PostgreSQL: Row Security Policies"
+
+[9]: https://www.postgresql.org/docs/current/sql-createpolicy.html "PostgreSQL: CREATE POLICY"
